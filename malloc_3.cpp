@@ -14,12 +14,12 @@ typedef struct MallocMetadata
 {
     size_t size;
     bool is_free;
-    MallocMetadata *next;        
+    MallocMetadata *next;
     MallocMetadata *prev;
 
     /// now we need double linked list
-    MallocMetadata *next_in_bin; 
-    MallocMetadata *prev_in_bin; 
+    MallocMetadata *next_in_bin;
+    MallocMetadata *prev_in_bin;
 } MallocMetadata;
 
 MallocMetadata *head = nullptr;
@@ -86,16 +86,16 @@ static void add_block_to_bin_hist(MallocMetadata *meta_pointer)
     /// second case: iter_bin_hist->size < meta_ptr->size , so we need to search for the first meta that
     /// his size less than ptr_meta
     while (iter_bin_hist->next_in_bin != nullptr &&
-            iter_bin_hist->next_in_bin->size < meta_pointer->size)
+           iter_bin_hist->next_in_bin->size < meta_pointer->size)
     {
         iter_bin_hist = iter_bin_hist->next_in_bin;
     }
-    
+
     if (iter_bin_hist->next_in_bin != nullptr)
     {
         iter_bin_hist->next_in_bin->prev_in_bin = meta_pointer;
     }
-    
+
     meta_pointer->next_in_bin = iter_bin_hist->next_in_bin;
     iter_bin_hist->next_in_bin = meta_pointer;
     meta_pointer->prev_in_bin = iter_bin_hist;
@@ -130,7 +130,7 @@ static void remove_block_from_bin_hist(MallocMetadata *meta_pointer)
     /// guess its just a check
     if (meta_pointer->next_in_bin == nullptr && meta_pointer->prev_in_bin == nullptr)
     {
-       return;
+        return;
     }
 
     meta_pointer->prev_in_bin->next_in_bin = meta_pointer->next_in_bin;
@@ -178,12 +178,10 @@ static void split_block_by_size(MallocMetadata *meta_ptr, size_t size)
     MallocMetadata *new_block = (MallocMetadata*)((char*)meta_ptr + meta_data_size + size);
 
     /// set parameters for new block
+    new_block->is_free = true;
     new_block->next = meta_ptr->next;
     new_block->prev = meta_ptr;
-    new_block->is_free = true;
-    new_block->size = meta_ptr->size - (meta_data_size + size);
-    new_block->next_in_bin = nullptr;
-    new_block->prev_in_bin = nullptr;
+
 
     if (meta_ptr->next != nullptr)
     {
@@ -193,9 +191,13 @@ static void split_block_by_size(MallocMetadata *meta_ptr, size_t size)
     {
         tail = new_block;
     }
+    meta_ptr->next = new_block;
+    new_block->size = meta_ptr->size - (meta_data_size + size);
+    new_block->next_in_bin = nullptr;
+    new_block->prev_in_bin = nullptr;
 
     /// set parameters for meta_ptr
-    meta_ptr->next = new_block;
+
     meta_ptr->size = size;
     meta_ptr->is_free = false;
 
@@ -207,11 +209,11 @@ static void *allocation_mmap_by_size(size_t size)
 {
     /// done
     void *new_address = mmap(NULL,
-                        (size + meta_data_size),
-                        PROT_WRITE | PROT_READ,
-                        MAP_ANONYMOUS | MAP_PRIVATE,
-                        -1,
-                        0);
+                             (size + meta_data_size),
+                             PROT_WRITE | PROT_READ,
+                             MAP_ANONYMOUS | MAP_PRIVATE,
+                             -1,
+                             0);
     if (new_address == (void *)(-1))
     {
         return nullptr;
@@ -357,11 +359,11 @@ void *smalloc(size_t size)
     //any free space
     MallocMetadata *new_free_block = search_block_in_bin_hist_and_remove(size);
     if (new_free_block != nullptr)
-    { 
+    {
         return if_there_free_space(size,new_free_block);
     }
-    bool tail_is_free = tail->is_free;
-    if (tail != nullptr && tail_is_free)
+//    bool tail_is_free = tail->is_free;
+    if (tail != nullptr && tail->is_free)
     {
         return try_wild(size);
     }
@@ -385,7 +387,7 @@ void *smalloc(size_t size)
         head = new_meta_data;
         new_meta_data->prev = nullptr;
     }
-    else 
+    else
     {
         new_meta_data->prev = tail;
         if (tail != nullptr)
@@ -420,7 +422,7 @@ void sfree(void *p)
     /// done
     if (p == nullptr)
         return;
-    
+
     MallocMetadata *meta_pointer = meta_address_from_block(p);
     if (meta_pointer->is_free)
     {
@@ -436,12 +438,12 @@ void sfree(void *p)
     meta_pointer->is_free = true;
     number_of_free_block += 1;
 
-    bool cond2 = meta_pointer->next->is_free;
+//    bool cond2 = meta_pointer->next->is_free;
     // try next
-    if (meta_pointer->next != nullptr && cond2)
+    if (meta_pointer->next != nullptr && meta_pointer->next->is_free)
     {
-        size_t meta_pointer_size = meta_pointer->size;
         remove_block_from_bin_hist(meta_pointer->next);
+        size_t meta_pointer_size = meta_pointer->size;
         meta_pointer->size = meta_pointer_size + meta_pointer->next->size + meta_data_size;
         meta_pointer->next = meta_pointer->next->next;
         if (meta_pointer->next != nullptr)
@@ -461,8 +463,8 @@ void sfree(void *p)
     }
 
     // try prev
-    bool cond3 = meta_pointer->prev->is_free;
-    if (meta_pointer->prev != nullptr && cond3)
+//    bool cond3 = meta_pointer->prev->is_free;
+    if (meta_pointer->prev != nullptr && meta_pointer->prev->is_free)
     {
         remove_block_from_bin_hist(meta_pointer->prev);
         meta_pointer = meta_pointer->prev;
@@ -478,7 +480,7 @@ void sfree(void *p)
         {
             tail = meta_pointer;
         }
-        
+
         number_of_free_block -= 1;
         number_of_free_bytes = number_of_free_bytes + meta_data_size;
         number_of_allocated_blocks -= 1;
@@ -504,7 +506,7 @@ void *srealloc(void *oldp, size_t size)
     MallocMetadata *old_meta_pointer = meta_address_from_block(oldp);
 
     //mmap realloc
-    bool cond1 = size >= MMAP_MIN_SIZE;
+    bool cond1 = (size >= MMAP_MIN_SIZE);
     if (cond1)
     {
         return mmap_reallocation(size,oldp,old_meta_pointer);
@@ -512,7 +514,7 @@ void *srealloc(void *oldp, size_t size)
 
 
     // reg
-    bool cond2 = size<=old_meta_pointer->size;
+    bool cond2 = (size<=old_meta_pointer->size);
     if (cond2)
     {
         return reg_reallocation(size,old_meta_pointer,oldp);
@@ -520,12 +522,12 @@ void *srealloc(void *oldp, size_t size)
 
     // try join prev
     MallocMetadata *old_p_prev_block = old_meta_pointer->prev;
-    bool cond3 = old_p_prev_block->is_free;
+    bool cond3 = (old_p_prev_block->is_free);
     if (old_p_prev_block != nullptr && cond3)
     {
         size_t old_meta_pointer_prev_size = old_meta_pointer->prev->size;
         size_t slot_with_prev = old_meta_pointer_prev_size + meta_data_size + old_meta_pointer->size;
-        bool cond4 = slot_with_prev >= size;
+        bool cond4 = (slot_with_prev >= size);
         if (cond4)
         {
             remove_block_from_bin_hist(old_p_prev_block);
@@ -540,7 +542,7 @@ void *srealloc(void *oldp, size_t size)
             old_p_prev_block->is_free = false;
 
             old_p_prev_block->next = old_meta_pointer->next;
-            bool cond5 = old_meta_pointer->next != nullptr;
+            bool cond5 = (old_meta_pointer->next != nullptr);
             if (cond5)
             {
                 old_meta_pointer->next->prev = old_p_prev_block;
@@ -575,8 +577,8 @@ void *srealloc(void *oldp, size_t size)
 
     // try join next
     MallocMetadata *next_block_pointer = old_meta_pointer->next;
-    bool cond7 = next_block_pointer != nullptr && next_block_pointer->is_free;
-    if (cond7)
+//    bool cond7 = next_block_pointer != nullptr && next_block_pointer->is_free;
+    if (next_block_pointer != nullptr && next_block_pointer->is_free)
     {
         unsigned long u_l_old_p_next_block_size = (unsigned long)old_meta_pointer->next->size;
         size_t slot_with_next = u_l_old_p_next_block_size + meta_data_size + old_meta_pointer->size;
@@ -592,9 +594,9 @@ void *srealloc(void *oldp, size_t size)
             number_of_metadata_bytes =number_of_metadata_bytes- meta_data_size;
 
             old_meta_pointer->size = slot_with_next;
-            
+
             old_meta_pointer->next = next_block_pointer->next;
-            bool cond9 = next_block_pointer->next != nullptr;
+            bool cond9 = (next_block_pointer->next != nullptr);
             if (cond9)
             {
                 next_block_pointer->next->prev = old_meta_pointer;
@@ -610,29 +612,30 @@ void *srealloc(void *oldp, size_t size)
             bool ans2=(u_l_old_meta_pointer_size - size - meta_data_size>= LARGE_KB);
             bool cond10 = ans1&&ans2;
             if (cond10)
-            { 
+            {
                 split_block_by_size(old_meta_pointer, size);
-                
+
                 number_of_free_block += 1;
                 number_of_free_bytes =number_of_free_bytes + old_meta_pointer->next->size;
                 number_of_allocated_blocks += 1;
                 number_of_allocated_bytes =number_of_allocated_bytes - meta_data_size;
                 number_of_metadata_bytes =number_of_metadata_bytes+ meta_data_size;
             }
-            return oldp; 
+            return oldp;
         }
     }
 
     // prev try
-    bool cond11 = old_p_prev_block != nullptr && old_p_prev_block->is_free &&
-            next_block_pointer != nullptr  && next_block_pointer->is_free;
-    if (cond11)
+//    bool cond11 = old_p_prev_block != nullptr && old_p_prev_block->is_free &&
+//                  next_block_pointer != nullptr  && next_block_pointer->is_free;
+    if (old_p_prev_block != nullptr && old_p_prev_block->is_free &&
+        next_block_pointer != nullptr  && next_block_pointer->is_free)
     {
         unsigned long u_l_old_meta_pointer_next_size = (unsigned long)old_meta_pointer->next->size;
         unsigned long u_l_old_meta_pointer_prev_size = (unsigned long)old_meta_pointer->prev->size;
         size_t next_and_prev_block = u_l_old_meta_pointer_prev_size +
-                u_l_old_meta_pointer_next_size +
-                2 * meta_data_size + old_meta_pointer->size;
+                                     u_l_old_meta_pointer_next_size +
+                                     2 * meta_data_size + old_meta_pointer->size;
         bool cond12 = size<=next_and_prev_block;
         if (cond12)
         {
@@ -653,7 +656,7 @@ void *srealloc(void *oldp, size_t size)
 
             old_p_prev_block->size = next_and_prev_block;
             old_p_prev_block->is_free = false;
-            
+
             old_p_prev_block->next = next_block_pointer->next;
             bool cond13 = old_p_prev_block->next != nullptr;
             if (cond13)
@@ -664,8 +667,8 @@ void *srealloc(void *oldp, size_t size)
             {
                 tail = old_p_prev_block;
             }
-            
-            
+
+
             void *destination = block_address_from_meta(old_p_prev_block);
             memmove(destination, oldp, old_meta_pointer->size);
 
@@ -676,7 +679,7 @@ void *srealloc(void *oldp, size_t size)
             bool ans2=(old_p_prev_block->size - size - meta_data_size >= LARGE_KB);
             bool cond14 = ans1&& ans2;
             if (cond14)
-            { 
+            {
                 split_block_by_size(old_p_prev_block, size);
 
                 number_of_free_block+=1;
@@ -700,8 +703,8 @@ void *srealloc(void *oldp, size_t size)
     {
         return nullptr;
     }
-    bool cond16 = destination == block_address_from_meta(tail)&&(tail == old_meta_pointer);
-    if(cond16)
+//    bool cond16 = destination == block_address_from_meta(tail)&&(tail == old_meta_pointer);
+    if(destination == block_address_from_meta(tail)&&(tail == old_meta_pointer))
     {
         number_of_free_block+=1;
         number_of_free_bytes =number_of_free_bytes+ old_ptr_size;
