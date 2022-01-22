@@ -34,63 +34,63 @@ class List {
     MallocMetadata *head = nullptr;
     MallocMetadata *tail = nullptr;
 
-    void new_tail_to_list(MallocMetadata *_ntail) {
-        _ntail->prev = tail;
-        tail = _ntail;
+    void insert_new_tail_to_mem_alloc_list(MallocMetadata *new_tail) {
+        new_tail->prev = tail;
+        tail = new_tail;
         tail->prev->next = tail;
         tail->next = nullptr;
     }
 
 public:
     List() : head(nullptr), tail(nullptr) {}
-    void *inset_to_mem_allocation_list(size_t size)
+    void *inset_to_mem_alloc_list(size_t size)
     {
         //case empty list
         if (head == nullptr)
         {
             // insert list head
-            MallocMetadata *_nhead = (MallocMetadata *) sbrk(sizeof(MallocMetadata));
-            if (_nhead == (void *) (-1))
+            MallocMetadata *new_head = (MallocMetadata *) sbrk(sizeof(MallocMetadata));
+            if (new_head == (void *) (-1))
             {
                 return nullptr;
             }
             else
             {
-                void *addr = sbrk(size);
-                if (addr == (void *) (-1))
+                void *address = sbrk(size);
+                if (address == (void *) (-1))
                 {
                     return nullptr;
                 }
-                _nhead->size = size;
-                _nhead->is_free = false;
-                _nhead->address = addr;
-                _nhead->prev = nullptr;
-                _nhead->next = nullptr;
-                head = _nhead;
-                tail = _nhead;
-                return addr;
+                new_head->size = size;
+                new_head->is_free = false;
+                new_head->address = address;
+                new_head->prev = nullptr;
+                new_head->next = nullptr;
+                head = new_head;
+                tail = new_head;
+                return address;
             }
         }
         else
         {
             // like a queue add in the end
-            MallocMetadata *_ntail = (MallocMetadata *) sbrk(sizeof(MallocMetadata));
-            if (_ntail == (void *) (-1))
+            MallocMetadata *new_tail = (MallocMetadata *) sbrk(sizeof(MallocMetadata));
+            if (new_tail == (void *) (-1))
             {
                 return nullptr;
             }
             else
             {
-                void *addr = sbrk(size);
-                if (addr == (void *) (-1))
+                void *address = sbrk(size);
+                if (address == (void *) (-1))
                 {
                     return nullptr;
                 }
-                _ntail->size = size;
-                _ntail->is_free = false;
-                _ntail->address = addr;
-                new_tail_to_list(_ntail);
-                return addr;
+                new_tail->size = size;
+                new_tail->is_free = false;
+                new_tail->address = address;
+                insert_new_tail_to_mem_alloc_list(new_tail);
+                return address;
             }
         }
     }
@@ -246,7 +246,7 @@ void *smalloc(size_t size)
     }
 
     /// allocates (sbrk()) one if none are found.
-    void *insert_result = malloc_memory_allocation_block_list->inset_to_mem_allocation_list(size);
+    void *insert_result = malloc_memory_allocation_block_list->inset_to_mem_alloc_list(size);
     if (insert_result == nullptr)
     {
         return nullptr;
