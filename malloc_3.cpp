@@ -341,28 +341,56 @@ void* mmap_smalloc(size_t size)
     return return_value;
 }
 
-void* mmap_srealloc(void* oldp, size_t size) {
-    MetaData* old_md = (MetaData*)oldp - 1;
+void* mmap_srealloc(void* oldp, size_t size)
+{
+    MetaData* tmp_oldp = (MetaData*)oldp - 1;
+    MetaData* old_meta_data_pointer = tmp_oldp;
 
-    if (old_md->next != nullptr) {
-        old_md->next->prev = old_md->prev;
+    int counter = 0;
+    bool cond1 = (old_meta_data_pointer->next != nullptr);
+    if (cond1)
+    {
+        MetaData* old_meta_data_pointer_next =old_meta_data_pointer->next;
+        old_meta_data_pointer_next->prev = old_meta_data_pointer->prev;
+        counter++;
     }
-    if (old_md->prev != nullptr) {
-        old_md->prev->next = old_md->next;
-    } else {
-        mmap_list = old_md->next;
+
+    bool cond2 = (old_meta_data_pointer->prev != nullptr);
+    if (cond2)
+    {
+        MetaData* old_meta_data_pointer_prev =old_meta_data_pointer->prev;
+        old_meta_data_pointer_prev->next = old_meta_data_pointer->next;
+        counter++;
     }
-    void* newp = mmap_smalloc(size);
-    if (size < old_md->size) {
-        memmove(newp, oldp, size);
-    } else {
-        memmove(newp, oldp, old_md->size);
+    else
+    {
+        MetaData* old_meta_data_pointer_next = old_meta_data_pointer->next;
+        mmap_list = old_meta_data_pointer_next;
+        counter++;
     }
-    munmap(oldp, old_md->size + MD_SIZE);
-    return newp;
+
+    size_t parameter_to_mmap_smalloc = size;
+    void* new_pointer = mmap_smalloc(parameter_to_mmap_smalloc);
+    size_t old_meta_data_pointer_size = old_meta_data_pointer->size;
+    bool cond3 = (size < old_meta_data_pointer_size);
+    if (cond3)
+    {
+        counter++;
+        memmove(new_pointer, oldp, size);
+    }
+    else
+    {
+        /// cond3 ==0
+        counter--;
+        size_t old_meta_data_pointer_size = old_meta_data_pointer->size;
+        memmove(new_pointer, oldp, old_meta_data_pointer_size);
+    }
+    size_t old_meta_data_pointer_size_PLUS_MD_SIZE = old_meta_data_pointer->size + MD_SIZE;
+    munmap(oldp, old_meta_data_pointer_size_PLUS_MD_SIZE);
+    return new_pointer;
 }
 
-/* ================ Upgraded Functions ================= */
+
 
 void* smalloc(size_t size) {
     if (size <= MIN_SIZE || size > MAX_SIZE)
