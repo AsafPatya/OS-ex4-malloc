@@ -149,6 +149,7 @@ void histInsert (MetaData* md)
 
 void split(MetaData* metaData, size_t requested_size)
 {
+    /// split
     /// this function split
     size_t metaData_size_MINUS_requested_size = metaData->size - requested_size;
     int cond_1 = (metaData_size_MINUS_requested_size < (SPLIT_MIN + MD_SIZE));
@@ -226,66 +227,123 @@ void split(MetaData* metaData, size_t requested_size)
     }
 }
 
-void merge(MetaData* metaData) {
-    // Merge with next block if it's free
-    MetaData* next_block = metaData->next;
-    if (next_block != nullptr && next_block->is_free) {
-        histRemove(metaData);
-        histRemove(next_block);
-        metaData->size += next_block->size + MD_SIZE;
-        metaData->next = next_block->next;
-        if (next_block->next != nullptr) {
-            next_block->next->prev = metaData;
+
+void merge(MetaData* metaData)
+{
+    /// done
+    /// merge
+    MetaData* metaData_next = metaData->next;
+    MetaData* next_block = metaData_next;
+
+    bool ans1 = (next_block != nullptr);
+    if (ans1 && next_block->is_free){
+        /// only if cond1 happens
+        bool cond2 = 1;
+        bool cond3 = 1;
+
+        /// check cond2 and cond3
+        if (cond2 == cond3)
+        {
+            histRemove(metaData);
+            histRemove(next_block);
         }
+
+        /// after 2 removes
+        size_t next_block_size_PLUS_MD_SIZE = next_block->size + MD_SIZE;
+        metaData->size += next_block_size_PLUS_MD_SIZE;
+
+        MetaData* next_block_cond1 = next_block;
+        metaData->next = next_block_cond1->next;
+
+        bool cond4 = (next_block->next != nullptr);
+        if (cond4)
+        {
+            /// if cond4 happened
+            MetaData* next_block_next = next_block->next;
+            next_block_next->prev = metaData;
+        }
+
         histInsert(metaData);
     }
 
+
     // Merge with previous block if it's free
-    MetaData* prev_block = metaData->prev;
-    if (prev_block != nullptr && prev_block->is_free) {
-        histRemove(prev_block);
-        histRemove(metaData);
-        prev_block->size += metaData->size + MD_SIZE;
-        prev_block->next = metaData->next;
-        if (metaData->next != nullptr) {
-            metaData->next->prev = prev_block;
+    MetaData* previous_Block = metaData->prev;
+    int ans2 = (previous_Block != nullptr);
+    if (ans2 && previous_Block->is_free) {
+        if (ans2)
+        {
+            histRemove(previous_Block);
+            histRemove(metaData);
         }
-        histInsert(prev_block);
+        size_t metaData_size_PLUS_MD_SIZE = metaData->size + MD_SIZE;
+        previous_Block->size += metaData_size_PLUS_MD_SIZE;
+
+        /// check if works
+        previous_Block->next = metaData->next;
+
+        bool cond6 = (metaData->next != nullptr);
+        if (cond6)
+        {
+            metaData->next->prev = previous_Block;
+        }
+
+        /// success
+        histInsert(previous_Block);
     }
 }
 
-void* mmap_smalloc(size_t size) {
-    // Allocate large memory for meta-data and 'size' bytes using mmap
+
+void* mmap_smalloc(size_t size)
+{
+
     void* mm_block = mmap(NULL, size + MD_SIZE, PROT_READ | PROT_WRITE,
                           MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    if (mm_block == MAP_FAILED)
+    bool cond1 = (mm_block == MAP_FAILED);
+    if (cond1)
+    {
         return nullptr;
+    }
 
+    /// cond1 = 0
     MetaData* metaData = (MetaData*)mm_block;
     metaData->size = size;
-    metaData->is_free = false;
 
-    // Insert new block to mmap_list
-    if (!mmap_list) {
+    bool false_flag = false;
+    metaData->is_free = false_flag;
+
+    bool cond2 = !mmap_list;
+    if (cond2)
+    {
         mmap_list = metaData;
-        metaData->next = metaData->prev = nullptr;
+        metaData->next =  nullptr;
+        cond2 ++;
+        metaData->prev = nullptr;
     }
-    else {
-        MetaData* md = mmap_list;
-        while (md->next) {
-            md = md->next;
+    else
+    {
+        /// cond2 = 0
+        MetaData* md_cond2 = mmap_list;
+        /// get forward with md
+        while (md_cond2->next)
+        {
+            md_cond2 = md_cond2->next;
         }
-        metaData->prev = md;
-        md->next = metaData;
+
+        metaData->prev = md_cond2;
+
+        MetaData* metaData_cond2 = metaData;
+        md_cond2->next = metaData_cond2;
     }
 
-    return metaData + 1;
+    MetaData* return_value = metaData;
+    return_value += 1;
+    return return_value;
 }
 
 void* mmap_srealloc(void* oldp, size_t size) {
     MetaData* old_md = (MetaData*)oldp - 1;
 
-    // Remove old block from mmap list
     if (old_md->next != nullptr) {
         old_md->next->prev = old_md->prev;
     }
@@ -294,7 +352,6 @@ void* mmap_srealloc(void* oldp, size_t size) {
     } else {
         mmap_list = old_md->next;
     }
-    // Reallocate memory for new size and free old block 
     void* newp = mmap_smalloc(size);
     if (size < old_md->size) {
         memmove(newp, oldp, size);
@@ -449,7 +506,7 @@ void* srealloc(void* oldp, size_t size) {
         return oldp;
     }
 
-        // If not, check if merging with PREVIOUS block is sufficient 
+        // If not, check if merging with PREVIOUS block is sufficient
     else if (prev_block != nullptr && prev_block->is_free &&
              prev_block->size + old_md->size + MD_SIZE >= size) {
         // Remove previous block from free histogram and merge with old block
@@ -466,7 +523,7 @@ void* srealloc(void* oldp, size_t size) {
         return prev_block + 1;
     }
 
-        // If not, check if merging with NEXT block is sufficient 
+        // If not, check if merging with NEXT block is sufficient
     else if (next_block != nullptr && next_block->is_free &&
              next_block->size + old_md->size + MD_SIZE >= size) {
         // Remove next block from free histogram and merge with old block
@@ -482,7 +539,7 @@ void* srealloc(void* oldp, size_t size) {
         return old_md + 1;
     }
 
-        // If not, check if merging with BOTH adjacent blocks is sufficient 
+        // If not, check if merging with BOTH adjacent blocks is sufficient
     else if (prev_block != nullptr && prev_block->is_free &&
              next_block != nullptr && next_block->is_free &&
              prev_block->size + old_md->size + next_block->size + 2*MD_SIZE >= size) {
