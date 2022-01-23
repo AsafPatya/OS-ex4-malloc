@@ -10,6 +10,7 @@
 #define KILO_BYTE 1024
 #define LARGE_ALLOCATION 128 * KILO_BYTE
 #define METADATA_SIZE sizeof(Meta_Data_Struct)
+#define bins_size 128
 
 using std::memset;
 using std::memmove;
@@ -23,9 +24,12 @@ struct Meta_Data_Struct {
     Meta_Data_Struct* md_prev_free;
 };
 
+Meta_Data_Struct* bins[bins_size];
+
 Meta_Data_Struct* list_of_memory_allocation = nullptr;
 Meta_Data_Struct* list_of_mmap = nullptr;
-Meta_Data_Struct* bins[128];
+
+
 
 int bin_Index (size_t param_size)
 {
@@ -43,33 +47,6 @@ int bin_Index (size_t param_size)
     }
     int return_value = index-1;
     return return_value;
-}
-
-void bin_Remove(Meta_Data_Struct* meta_data_pointer)
-{
-    /// done
-    Meta_Data_Struct* md_param = meta_data_pointer;
-    bool cond_1 = (md_param->md_prev_free != nullptr);
-    if (cond_1)
-    {
-        md_param->md_prev_free->md_next_free = md_param->md_next_free;
-    }
-    else
-    {
-        int histIndex_md_param_size = bin_Index(md_param->md_size);
-        int index_hist = histIndex_md_param_size;
-
-        Meta_Data_Struct* md_param_next_free = md_param->md_next_free;
-        bins[index_hist] = md_param_next_free;
-    }
-    bool cond_2 = (md_param->md_next_free != nullptr);
-    if (cond_2)
-    {
-        Meta_Data_Struct* md_param_prev_free = md_param->md_prev_free;
-        md_param->md_next_free->md_prev_free = md_param_prev_free;
-    }
-    md_param->md_prev_free = nullptr;
-    md_param->md_next_free = nullptr;
 }
 
 void bin_Insert (Meta_Data_Struct* meta_data_pointer)
@@ -144,6 +121,150 @@ void bin_Insert (Meta_Data_Struct* meta_data_pointer)
             md_param_cond4->md_prev_free = current_md ;
             md_param_cond4->md_next_free = nullptr;
         }
+    }
+}
+
+void bin_Remove(Meta_Data_Struct* meta_data_pointer)
+{
+    /// done
+    Meta_Data_Struct* md_param = meta_data_pointer;
+    bool cond_1 = (md_param->md_prev_free != nullptr);
+    if (cond_1)
+    {
+        md_param->md_prev_free->md_next_free = md_param->md_next_free;
+    }
+    else
+    {
+        int histIndex_md_param_size = bin_Index(md_param->md_size);
+        int index_hist = histIndex_md_param_size;
+
+        Meta_Data_Struct* md_param_next_free = md_param->md_next_free;
+        bins[index_hist] = md_param_next_free;
+    }
+    bool cond_2 = (md_param->md_next_free != nullptr);
+    if (cond_2)
+    {
+        Meta_Data_Struct* md_param_prev_free = md_param->md_prev_free;
+        md_param->md_next_free->md_prev_free = md_param_prev_free;
+    }
+    md_param->md_prev_free = nullptr;
+    md_param->md_next_free = nullptr;
+}
+
+
+
+
+
+
+void* mmap_smalloction(size_t md_size)
+{
+
+    void* mm_block = mmap(NULL, md_size + METADATA_SIZE, PROT_READ | PROT_WRITE,
+                          MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    bool cond1 = (mm_block == MAP_FAILED);
+    if (cond1)
+    {
+        return nullptr;
+    }
+
+    /// cond1 = 0
+    Meta_Data_Struct* metaData = (Meta_Data_Struct*)mm_block;
+    metaData->md_size = md_size;
+
+    bool false_flag = false;
+    metaData->md_is_free = false_flag;
+
+    bool cond2 = !list_of_mmap;
+    if (cond2)
+    {
+        list_of_mmap = metaData;
+        metaData->md_next =  nullptr;
+        cond2 ++;
+        metaData->md_prev = nullptr;
+    }
+    else
+    {
+        /// cond2 = 0
+        Meta_Data_Struct* md_cond2 = list_of_mmap;
+        /// get forward with md
+        while (md_cond2->md_next)
+        {
+            md_cond2 = md_cond2->md_next;
+        }
+
+        metaData->md_prev = md_cond2;
+
+        Meta_Data_Struct* metaData_cond2 = metaData;
+        md_cond2->md_next = metaData_cond2;
+    }
+
+    Meta_Data_Struct* return_value = metaData;
+    return_value += 1;
+    return return_value;
+}
+
+void merge_not_in_use(Meta_Data_Struct* meta_data_ptr)
+{
+    /// done
+    /// merge
+    Meta_Data_Struct* metaData_next = meta_data_ptr->md_next;
+    Meta_Data_Struct* next_block = metaData_next;
+
+    bool ans1 = (next_block != nullptr);
+    if (ans1 && next_block->md_is_free){
+        /// only if cond1 happens
+        bool cond2 = 1;
+        bool cond3 = 1;
+
+        /// check cond2 and cond3
+        if (cond2 == cond3)
+        {
+            bin_Remove(meta_data_ptr);
+            bin_Remove(next_block);
+        }
+
+        /// after 2 removes
+        size_t next_block_size_PLUS_MD_SIZE = next_block->md_size + METADATA_SIZE;
+        meta_data_ptr->md_size += next_block_size_PLUS_MD_SIZE;
+
+        Meta_Data_Struct* next_block_cond1 = next_block;
+        meta_data_ptr->md_next = next_block_cond1->md_next;
+
+        bool cond4 = (next_block->md_next != nullptr);
+        if (cond4)
+        {
+            /// if cond4 happened
+            Meta_Data_Struct* next_block_next = next_block->md_next;
+            next_block_next->md_prev = meta_data_ptr;
+        }
+
+        bin_Insert(meta_data_ptr);
+    }
+
+
+    // Merge with previous block if it's free
+    Meta_Data_Struct* previous_Block = meta_data_ptr->md_prev;
+    int ans2 = (previous_Block != nullptr);
+    if (ans2 && previous_Block->md_is_free) {
+        if (ans2)
+        {
+            bin_Remove(previous_Block);
+            bin_Remove(meta_data_ptr);
+        }
+        size_t metaData_size_PLUS_MD_SIZE = meta_data_ptr->md_size + METADATA_SIZE;
+        previous_Block->md_size += metaData_size_PLUS_MD_SIZE;
+
+        /// check if works
+        previous_Block->md_next = meta_data_ptr->md_next;
+
+        bool cond6 = (meta_data_ptr->md_next != nullptr);
+        if (cond6)
+        {
+            meta_data_ptr->md_next->md_prev = previous_Block;
+        }
+
+        /// success
+        bin_Insert(previous_Block);
     }
 }
 
@@ -227,120 +348,6 @@ void split_block_by_size(Meta_Data_Struct* meta_data_ptr, size_t size)
     }
 }
 
-
-void merge_not_in_use(Meta_Data_Struct* meta_data_ptr)
-{
-    /// done
-    /// merge
-    Meta_Data_Struct* metaData_next = meta_data_ptr->md_next;
-    Meta_Data_Struct* next_block = metaData_next;
-
-    bool ans1 = (next_block != nullptr);
-    if (ans1 && next_block->md_is_free){
-        /// only if cond1 happens
-        bool cond2 = 1;
-        bool cond3 = 1;
-
-        /// check cond2 and cond3
-        if (cond2 == cond3)
-        {
-            bin_Remove(meta_data_ptr);
-            bin_Remove(next_block);
-        }
-
-        /// after 2 removes
-        size_t next_block_size_PLUS_MD_SIZE = next_block->md_size + METADATA_SIZE;
-        meta_data_ptr->md_size += next_block_size_PLUS_MD_SIZE;
-
-        Meta_Data_Struct* next_block_cond1 = next_block;
-        meta_data_ptr->md_next = next_block_cond1->md_next;
-
-        bool cond4 = (next_block->md_next != nullptr);
-        if (cond4)
-        {
-            /// if cond4 happened
-            Meta_Data_Struct* next_block_next = next_block->md_next;
-            next_block_next->md_prev = meta_data_ptr;
-        }
-
-        bin_Insert(meta_data_ptr);
-    }
-
-
-    // Merge with previous block if it's free
-    Meta_Data_Struct* previous_Block = meta_data_ptr->md_prev;
-    int ans2 = (previous_Block != nullptr);
-    if (ans2 && previous_Block->md_is_free) {
-        if (ans2)
-        {
-            bin_Remove(previous_Block);
-            bin_Remove(meta_data_ptr);
-        }
-        size_t metaData_size_PLUS_MD_SIZE = meta_data_ptr->md_size + METADATA_SIZE;
-        previous_Block->md_size += metaData_size_PLUS_MD_SIZE;
-
-        /// check if works
-        previous_Block->md_next = meta_data_ptr->md_next;
-
-        bool cond6 = (meta_data_ptr->md_next != nullptr);
-        if (cond6)
-        {
-            meta_data_ptr->md_next->md_prev = previous_Block;
-        }
-
-        /// success
-        bin_Insert(previous_Block);
-    }
-}
-
-
-void* mmap_smalloction(size_t md_size)
-{
-
-    void* mm_block = mmap(NULL, md_size + METADATA_SIZE, PROT_READ | PROT_WRITE,
-                          MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    bool cond1 = (mm_block == MAP_FAILED);
-    if (cond1)
-    {
-        return nullptr;
-    }
-
-    /// cond1 = 0
-    Meta_Data_Struct* metaData = (Meta_Data_Struct*)mm_block;
-    metaData->md_size = md_size;
-
-    bool false_flag = false;
-    metaData->md_is_free = false_flag;
-
-    bool cond2 = !list_of_mmap;
-    if (cond2)
-    {
-        list_of_mmap = metaData;
-        metaData->md_next =  nullptr;
-        cond2 ++;
-        metaData->md_prev = nullptr;
-    }
-    else
-    {
-        /// cond2 = 0
-        Meta_Data_Struct* md_cond2 = list_of_mmap;
-        /// get forward with md
-        while (md_cond2->md_next)
-        {
-            md_cond2 = md_cond2->md_next;
-        }
-
-        metaData->md_prev = md_cond2;
-
-        Meta_Data_Struct* metaData_cond2 = metaData;
-        md_cond2->md_next = metaData_cond2;
-    }
-
-    Meta_Data_Struct* return_value = metaData;
-    return_value += 1;
-    return return_value;
-}
-
 void* mmap_srealloction(void* old_ptr, size_t param_size)
 {
     Meta_Data_Struct* tmp_oldp = (Meta_Data_Struct*)old_ptr - 1;
@@ -391,6 +398,7 @@ void* mmap_srealloction(void* old_ptr, size_t param_size)
 }
 
 
+///functions
 
 void* smalloc(size_t size) {
     bool cond1 =(size <= MINIMUM_SIZE);

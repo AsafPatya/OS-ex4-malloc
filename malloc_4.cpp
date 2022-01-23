@@ -1,755 +1,785 @@
-
+#include <stdlib.h>
 #include <unistd.h>
 #include <cstring>
-#include <stdlib.h>
+#include <iostream>
 #include <sys/mman.h>
 
+#define MINIMUM_SIZE 0
+#define MAXIMUM_SIZE 100000000
+#define SPLIT_MINIMUN 128
+#define KILO_BYTE 1024
+#define LARGE_ALLOCATION 128 * KILO_BYTE
+#define METADATA_SIZE sizeof(Meta_Data_Struct)
+#define bins_size 128
 
-#define MAX_BLOCK_SIZE (100000000)
-#define MMAP_MIN_SIZE (131072)
-#define LARGE_KB (128)
-#define KB (1024)
-#define ALIGNED_TO_8 (8)
+using std::memset;
+using std::memmove;
 
+struct Meta_Data_Struct {
+    size_t md_size;
+    bool md_is_free;
+    Meta_Data_Struct* md_next;
+    Meta_Data_Struct* md_prev;
+    Meta_Data_Struct* md_next_free;
+    Meta_Data_Struct* md_prev_free;
+};
 
-typedef struct MallocMetadata
-{
-    size_t size;
-    bool is_free;
-    MallocMetadata *next;
-    MallocMetadata *prev;
+Meta_Data_Struct* bins[bins_size];
 
-    /// now we need double linked list
-    MallocMetadata *next_in_bin;
-    MallocMetadata *prev_in_bin;
-} MallocMetadata;
-
-MallocMetadata *head = nullptr;
-MallocMetadata *tail = nullptr;
-MallocMetadata *bins_hist[LARGE_KB] = {nullptr};
-
-static size_t meta_data_size = sizeof(MallocMetadata);
-static size_t number_of_free_block = 0;
-static size_t number_of_free_bytes = 0;
-static size_t number_of_allocated_blocks = 0;
-static size_t number_of_allocated_bytes = 0;
-static size_t number_of_metadata_bytes = 0;
-
-void *smalloc(size_t size);
-void *scalloc(size_t num, size_t size);
-void sfree(void *p);
-void *srealloc(void *oldp, size_t size);
-
-static void add_block_to_bin_hist(MallocMetadata *meta_pointer);
-static void remove_block_from_bin_hist(MallocMetadata *meta_pointer);
-static MallocMetadata *search_block_in_bin_hist_and_remove(size_t size);
-static void split_block_by_size(MallocMetadata *meta_ptr, size_t size);
-static void *allocation_mmap_by_size(size_t size);
-static void deallocation_mmap_by_meta_ptr(MallocMetadata *meta_ptr);
-static void* if_there_free_space(size_t size, MallocMetadata *new_free_block);
-static void* try_wild(size_t size);
-static void* mmap_reallocation(size_t size,void* oldp,MallocMetadata*old_meta_ptr);
-static void* reg_reallocation(size_t size, MallocMetadata* old_meta_ptr,void*oldp);
-////////////////////////////
+Meta_Data_Struct* list_of_memory_allocation = nullptr;
+Meta_Data_Struct* list_of_mmap = nullptr;
 
 
-inline MallocMetadata* meta_address_from_block(void* block_ptr){
-    return (MallocMetadata*) ((char*)(block_ptr) - meta_data_size);
-}
 
-inline void* block_address_from_meta(MallocMetadata* meta_ptr){
-    return (void*) ((char*)(meta_ptr) + meta_data_size);
-}
-
-static void add_block_to_bin_hist(MallocMetadata *meta_pointer)
+int bin_Index (size_t param_size)
 {
     /// done
-    int bin_hist_index_of_given_block = (meta_pointer->size) / KB;
-    MallocMetadata *iter_bin_hist = bins_hist[bin_hist_index_of_given_block];
-
-    /// case the d_linked list is empty, meta_ptr will be the first
-    if (iter_bin_hist == nullptr)
+    size_t size_par = param_size;
+    int index = 0;
+    int const_128 = 128;
+    while (index < const_128)
     {
-        bins_hist[bin_hist_index_of_given_block] = meta_pointer;
-        return;
-    }
-
-    /// if the d_linked list not empty, than need to inset the meta_ptr in the right place.
-    /// d_linked list suppose to be sorted by size
-    /// first case: iter_bin_hist->size >= meta_ptr->size , so we put meta_ptr first and finish
-    if (iter_bin_hist->size >= meta_pointer->size)
-    {
-        meta_pointer->next_in_bin = iter_bin_hist;
-        iter_bin_hist->prev_in_bin = meta_pointer;
-        bins_hist[bin_hist_index_of_given_block] = meta_pointer;
-        return;
-    }
-
-    /// second case: iter_bin_hist->size < meta_ptr->size , so we need to search for the first meta that
-    /// his size less than ptr_meta
-    while (iter_bin_hist->next_in_bin != nullptr &&
-           iter_bin_hist->next_in_bin->size < meta_pointer->size)
-    {
-        iter_bin_hist = iter_bin_hist->next_in_bin;
-    }
-
-    if (iter_bin_hist->next_in_bin != nullptr)
-    {
-        iter_bin_hist->next_in_bin->prev_in_bin = meta_pointer;
-    }
-
-    meta_pointer->next_in_bin = iter_bin_hist->next_in_bin;
-    iter_bin_hist->next_in_bin = meta_pointer;
-    meta_pointer->prev_in_bin = iter_bin_hist;
-}
-
-static void remove_block_from_bin_hist(MallocMetadata *meta_pointer)
-{
-    /// done
-    int bin_hist_index_of_given_block = (meta_pointer->size) / KB;
-
-    /// case the first meta is meta_pointer
-    if (bins_hist[bin_hist_index_of_given_block] == meta_pointer)
-    {
-        if (meta_pointer->next_in_bin == nullptr)
-        {
-            /// case the d_linked_list consists only the meta_pointer
-            bins_hist[bin_hist_index_of_given_block] = nullptr;
-            return;
+        int index_mul_KB = index*KILO_BYTE;
+        if (index_mul_KB <= size_par && size_par < (1+index)*KILO_BYTE){
+            return index ;
         }
-        /// there are other meta in this d_linked list
-        bins_hist[bin_hist_index_of_given_block] = meta_pointer->next_in_bin;
-        meta_pointer->next_in_bin->prev_in_bin = nullptr;
-        return;
+        index = index + 1;
     }
-
-    /// case the first meta is not the meta_pointer
-    if (meta_pointer->next_in_bin != nullptr)
-    {
-        meta_pointer->next_in_bin->prev_in_bin = meta_pointer->prev_in_bin;
-    }
-    /// dont know how this case is possible
-    /// guess its just a check
-    if (meta_pointer->next_in_bin == nullptr && meta_pointer->prev_in_bin == nullptr)
-    {
-        return;
-    }
-
-    meta_pointer->prev_in_bin->next_in_bin = meta_pointer->next_in_bin;
-
-    /// reset the pinter of meta_pointer
-    meta_pointer->next_in_bin = nullptr;
-    meta_pointer->prev_in_bin = nullptr;
+    int return_value = index-1;
+    return return_value;
 }
 
-static MallocMetadata* search_block_in_bin_hist_and_remove(size_t size)
+void bin_Insert (Meta_Data_Struct* meta_data_pointer)
 {
-    /// done
-    /// dont understand the function
-    /// i think its search for the first block that size <= block.size, and just remove it.
-    /// function change names done
-    MallocMetadata *meta_iterator = nullptr;
-    int index_in_bin_hist = size / KB;
-    for (;index_in_bin_hist < LARGE_KB; index_in_bin_hist++)
+    Meta_Data_Struct* md_param = meta_data_pointer;
+    size_t md_param_size = md_param->md_size;
+    int index_hist = bin_Index(md_param_size);
+    Meta_Data_Struct* slot_hist_by_index = bins[index_hist];
+
+    bool cond_1 = (slot_hist_by_index == nullptr);
+    if (cond_1)
     {
-        if (bins_hist[index_in_bin_hist] != nullptr)
+        bins[index_hist] = md_param;
+        md_param->md_next_free = nullptr;
+        md_param->md_prev_free = nullptr;
+    }
+    else
+    {
+        bool is_inserted_flag;
+        is_inserted_flag = false;
+        Meta_Data_Struct* current_md = slot_hist_by_index;
+        while (slot_hist_by_index != nullptr)
         {
-            meta_iterator = bins_hist[index_in_bin_hist];
-            while (meta_iterator != nullptr)
+            size_t slot_hist_by_index_size = slot_hist_by_index->md_size;
+            bool cond_2 = (slot_hist_by_index_size >= md_param_size);
+            if (cond_2)
             {
-                if (size<=meta_iterator->size)
+                Meta_Data_Struct* slot_hist_by_index_prev_free = slot_hist_by_index->md_prev_free;
+                bool cond_3 = (slot_hist_by_index_prev_free == nullptr);
+                if (cond_3)
                 {
-                    remove_block_from_bin_hist(meta_iterator);
-                    return meta_iterator;
+                    Meta_Data_Struct* md_param_cond_3 = md_param;
+
+                    bins[index_hist] = md_param_cond_3;
+                    md_param_cond_3->md_next_free = slot_hist_by_index;
+                    md_param_cond_3->md_prev_free = nullptr;
+                    slot_hist_by_index->md_prev_free = md_param_cond_3;
+                    is_inserted_flag = true ;
+                    break;
                 }
-                meta_iterator = meta_iterator->next_in_bin;
+                else
+                {
+                    Meta_Data_Struct* md_param_cond_3_else = md_param;
+                    Meta_Data_Struct* slot_hist_by_index_prev_free = slot_hist_by_index->md_prev_free;
+                    /// here change md_param to md_param_cond_3_else
+
+                    slot_hist_by_index_prev_free->md_next_free = md_param_cond_3_else;
+                    md_param_cond_3_else->md_prev_free = slot_hist_by_index_prev_free;
+                    int counter_cond_4 = 0;
+                    slot_hist_by_index_prev_free = md_param_cond_3_else;
+                    md_param_cond_3_else->md_next_free = slot_hist_by_index ;
+                    is_inserted_flag = true;
+                    break;
+                    counter_cond_4++;
+                }
             }
+            current_md = slot_hist_by_index ;
+            Meta_Data_Struct* slot_hist_by_index_next_free = slot_hist_by_index->md_next_free;
+            slot_hist_by_index = slot_hist_by_index_next_free;
         }
-    }
-    return nullptr;
-}
 
-static void split_block_by_size(MallocMetadata *meta_ptr, size_t size)
-{
-    /// done
-    /// taking meta_ptr and add another block with the given size just after meta_ptr
-    /// split meta_ptr to 2 blocks such that meta_ptr will be with size: size
-    /// the new block will be with the res.
-
-    /// give new_block the new address
-    MallocMetadata *new_block = (MallocMetadata*)((char*)meta_ptr + meta_data_size + size);
-
-    /// set parameters for new block
-    new_block->next = meta_ptr->next;
-    new_block->prev = meta_ptr;
-    new_block->is_free = true;
-    new_block->size = meta_ptr->size - (meta_data_size + size);
-    new_block->next_in_bin = nullptr;
-    new_block->prev_in_bin = nullptr;
-
-    if (meta_ptr->next != nullptr)
-    {
-        meta_ptr->next->prev = new_block;
-    }
-    else
-    {
-        tail = new_block;
-    }
-
-    /// set parameters for meta_ptr
-    meta_ptr->next = new_block;
-    meta_ptr->size = size;
-    meta_ptr->is_free = false;
-
-    /// add new block to hist
-    add_block_to_bin_hist(new_block);
-}
-
-static void *allocation_mmap_by_size(size_t size)
-{
-    /// done
-    void *new_address = mmap(NULL,
-                             (size + meta_data_size),
-                             PROT_WRITE | PROT_READ,
-                             MAP_ANONYMOUS | MAP_PRIVATE,
-                             -1,
-                             0);
-    if (new_address == (void *)(-1))
-    {
-        return nullptr;
-    }
-    MallocMetadata *new_meta_data = (MallocMetadata*)new_address;
-    new_meta_data->is_free = false;
-    new_meta_data->size = size;
-    new_meta_data->next = nullptr;
-    new_meta_data->prev = nullptr;
-    new_meta_data->next_in_bin = nullptr;
-    new_meta_data->prev_in_bin = nullptr;
-
-    /// set counters
-    number_of_metadata_bytes = number_of_metadata_bytes + meta_data_size;
-    number_of_allocated_blocks = number_of_allocated_blocks +1;
-    number_of_allocated_bytes = number_of_allocated_bytes + size;
-
-    return block_address_from_meta(new_meta_data);
-}
-
-
-static void deallocation_mmap_by_meta_ptr(MallocMetadata *meta_ptr)
-{
-    /// done
-    number_of_allocated_blocks = number_of_allocated_blocks - 1;
-    number_of_allocated_bytes = number_of_allocated_bytes - meta_ptr->size;
-    number_of_metadata_bytes = number_of_metadata_bytes - meta_data_size;
-
-    munmap(meta_ptr, meta_ptr->size + meta_data_size);
-    return;
-}
-static void* if_there_free_space(size_t size, MallocMetadata *new_free_block)
-{
-    /// done
-    /// dont understand what the function does
-    new_free_block->is_free = false;
-    unsigned long u_l_size = (unsigned long)size;
-    unsigned long u_l_meta_data_size = (unsigned long)meta_data_size;
-    unsigned long u_l_nfree_block = (unsigned long)new_free_block->size;
-
-    bool ans1 = (u_l_nfree_block >= u_l_size + u_l_meta_data_size);
-    bool ans2 = (new_free_block->size - size - meta_data_size >= LARGE_KB);
-    bool condition = ans1 && ans2;
-    if (condition)
-    {
-        split_block_by_size(new_free_block, size);
-        number_of_free_bytes = number_of_free_bytes -  (size + meta_data_size) ;
-        number_of_allocated_blocks += 1;
-        number_of_allocated_bytes = number_of_allocated_bytes - meta_data_size;
-        number_of_metadata_bytes =number_of_metadata_bytes + meta_data_size;
-    }
-    else
-    {
-        number_of_free_block -= 1;
-        number_of_free_bytes = number_of_free_bytes - new_free_block->size;
-    }
-    return block_address_from_meta(new_free_block);
-}
-
-static void* try_wild(size_t size)
-{
-    /// done
-    /// dont understand what the function does
-    size_t tail_size = tail->size;
-    size_t size_to_add = size - tail_size;
-    void* new_address = sbrk((intptr_t)size_to_add);
-    if (*((int *)new_address) == -1)
-    {
-        return nullptr;
-    }
-
-    number_of_free_block -= 1;
-    number_of_free_bytes = number_of_free_bytes - tail_size;
-    number_of_allocated_bytes =number_of_allocated_bytes + size_to_add;
-
-    remove_block_from_bin_hist(tail);
-    tail->size = tail->size + size_to_add;
-    tail->is_free = false;
-    return block_address_from_meta(tail);
-}
-static void* mmap_reallocation(size_t size, void* oldp,MallocMetadata*old_meta_ptr)
-{
-    /// done
-    /// dont understand what the function does
-    void *new_address = smalloc(size);
-    if (new_address == nullptr)
-    {
-        return nullptr;
-    }
-
-//    size_t size_to_move = (old_meta_ptr->size < size)?old_meta_ptr->size:size;
-    size_t size_to_move = 0;
-    if (old_meta_ptr->size < size)
-    {
-        size_to_move = old_meta_ptr->size;
-    }
-    else
-    {
-        size_to_move = size;
-    }
-
-    memmove(new_address, oldp, size_to_move);
-    sfree(oldp);
-    return new_address;
-}
-static void* reg_reallocation(size_t size, MallocMetadata* old_meta_ptr,void* oldp)
-{
-    unsigned long u_l_size = (unsigned long)size;
-    unsigned long u_l_meta_data_size = (unsigned long)meta_data_size;
-    unsigned long u_l_old_meta_ptr = (unsigned long)old_meta_ptr->size;
-    bool ans1 = (u_l_old_meta_ptr >= u_l_size + u_l_meta_data_size);
-    int size_to_add = old_meta_ptr->size - size - meta_data_size;
-    bool ans2=(size_to_add >= LARGE_KB);
-    bool condition = ans1 && ans2;
-    if (condition)
-    {
-        split_block_by_size(old_meta_ptr, size);
-        number_of_free_block += 1;
-        number_of_free_bytes = number_of_free_bytes + size_to_add;
-        number_of_allocated_blocks += 1;
-        number_of_allocated_bytes = number_of_allocated_bytes -  meta_data_size;
-        number_of_metadata_bytes = number_of_metadata_bytes + meta_data_size;
-    }
-    return oldp;
-}
-
-/// #smalloc
-void *smalloc(size_t size)
-{
-    /// done
-    if (size == 0 || size > MAX_BLOCK_SIZE)
-    {
-        return nullptr;
-    }
-
-    if (size % ALIGNED_TO_8 != 0)
-    {
-        size += ALIGNED_TO_8- (size % ALIGNED_TO_8);
-    }
-    //mmap case
-    if (size >= MMAP_MIN_SIZE)
-    {
-        void *new_address = allocation_mmap_by_size(size);
-        return new_address;
-    }
-
-    //any free space
-    MallocMetadata *new_free_block = search_block_in_bin_hist_and_remove(size);
-    if (new_free_block != nullptr)
-    {
-        return if_there_free_space(size,new_free_block);
-    }
-    bool tail_is_free = tail->is_free;
-    if (tail != nullptr && tail_is_free)
-    {
-        return try_wild(size);
-    }
-
-    //reg case
-    void* new_address = sbrk((intptr_t)(size + meta_data_size));
-    if (*((int *)new_address) == -1)
-    {
-        return nullptr;
-    }
-
-    MallocMetadata *new_meta_data = (MallocMetadata*)new_address;
-    new_meta_data->is_free = false;
-    new_meta_data->next = nullptr;
-    new_meta_data->size = size;
-    new_meta_data->next_in_bin = nullptr;
-    new_meta_data->prev_in_bin = nullptr;
-
-    if (head == nullptr)
-    {
-        head = new_meta_data;
-        new_meta_data->prev = nullptr;
-    }
-    else
-    {
-        new_meta_data->prev = tail;
-        if (tail != nullptr)
+        bool cond_4 = (!is_inserted_flag);
+        int counter_4 = 0;
+        if (cond_4)
         {
-            tail->next = new_meta_data;
+            Meta_Data_Struct* md_param_cond4 = md_param;
+            current_md->md_next_free = md_param_cond4;
+            if (counter_4)
+            {
+                counter_4++;
+            }
+            md_param_cond4->md_prev_free = current_md ;
+            md_param_cond4->md_next_free = nullptr;
         }
     }
-    tail = new_meta_data;
-    number_of_allocated_blocks += 1;
-    number_of_allocated_bytes = number_of_allocated_bytes + size;
-    number_of_metadata_bytes = number_of_metadata_bytes + meta_data_size;
-    return block_address_from_meta(new_meta_data);
 }
 
-/// #scalloc
-void *scalloc(size_t num, size_t size)
+void bin_Remove(Meta_Data_Struct* meta_data_pointer)
 {
     /// done
-    size_t new_size = num * size;
-    void *new_address = smalloc(new_size);
-    if (new_address == nullptr)
+    Meta_Data_Struct* md_param = meta_data_pointer;
+    bool cond_1 = (md_param->md_prev_free != nullptr);
+    if (cond_1)
     {
-        return nullptr;
+        md_param->md_prev_free->md_next_free = md_param->md_next_free;
     }
-    memset(new_address, 0, new_size);
-    return new_address;
+    else
+    {
+        int histIndex_md_param_size = bin_Index(md_param->md_size);
+        int index_hist = histIndex_md_param_size;
+
+        Meta_Data_Struct* md_param_next_free = md_param->md_next_free;
+        bins[index_hist] = md_param_next_free;
+    }
+    bool cond_2 = (md_param->md_next_free != nullptr);
+    if (cond_2)
+    {
+        Meta_Data_Struct* md_param_prev_free = md_param->md_prev_free;
+        md_param->md_next_free->md_prev_free = md_param_prev_free;
+    }
+    md_param->md_prev_free = nullptr;
+    md_param->md_next_free = nullptr;
 }
 
-/// #sfree
-void sfree(void *p)
-{
-    /// done
-    if (p == nullptr)
-        return;
 
-    MallocMetadata *meta_pointer = meta_address_from_block(p);
-    if (meta_pointer->is_free)
-    {
-        return;
-    }
-    bool cond1 = meta_pointer->size >= MMAP_MIN_SIZE;
+
+
+
+
+void* mmap_smalloction(size_t md_size)
+{
+
+    void* mm_block = mmap(NULL, md_size + METADATA_SIZE, PROT_READ | PROT_WRITE,
+                          MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    bool cond1 = (mm_block == MAP_FAILED);
     if (cond1)
     {
-        deallocation_mmap_by_meta_ptr(meta_pointer);
-        return;
-    }
-    number_of_free_bytes =number_of_free_bytes + meta_pointer->size;
-    meta_pointer->is_free = true;
-    number_of_free_block += 1;
-
-    bool cond2 = meta_pointer->next->is_free;
-    // try next
-    if (meta_pointer->next != nullptr && cond2)
-    {
-        size_t meta_pointer_size = meta_pointer->size;
-        remove_block_from_bin_hist(meta_pointer->next);
-        meta_pointer->size = meta_pointer_size + meta_pointer->next->size + meta_data_size;
-        meta_pointer->next = meta_pointer->next->next;
-        if (meta_pointer->next != nullptr)
-        {
-            meta_pointer->next->prev = meta_pointer;
-        }
-        else
-        {
-            tail = meta_pointer;
-        }
-
-        number_of_free_block -= 1;
-        number_of_free_bytes = number_of_free_bytes + meta_data_size;
-        number_of_allocated_blocks -= 1;
-        number_of_allocated_bytes = number_of_allocated_bytes + meta_data_size;
-        number_of_metadata_bytes = number_of_metadata_bytes - meta_data_size;
-    }
-
-    // try prev
-    bool cond3 = meta_pointer->prev->is_free;
-    if (meta_pointer->prev != nullptr && cond3)
-    {
-        remove_block_from_bin_hist(meta_pointer->prev);
-        meta_pointer = meta_pointer->prev;
-        size_t meta_pointer_size = meta_pointer->size;
-        meta_pointer->size = meta_pointer_size + meta_pointer->next->size + meta_data_size;
-
-        meta_pointer->next = meta_pointer->next->next;
-        if (meta_pointer->next != nullptr)
-        {
-            meta_pointer->next->prev = meta_pointer;
-        }
-        else
-        {
-            tail = meta_pointer;
-        }
-
-        number_of_free_block -= 1;
-        number_of_free_bytes = number_of_free_bytes + meta_data_size;
-        number_of_allocated_blocks -= 1;
-        number_of_allocated_bytes = number_of_allocated_bytes + meta_data_size;
-        number_of_metadata_bytes = number_of_metadata_bytes - meta_data_size;
-    }
-
-    add_block_to_bin_hist(meta_pointer);
-}
-
-/// #srealloc
-void *srealloc(void *oldp, size_t size)
-{
-    ///
-    if (size == 0 || size > MAX_BLOCK_SIZE)
-    {
         return nullptr;
     }
-    if (oldp == nullptr)
-    {
-        return (smalloc(size));
-    }
 
-    if (size % ALIGNED_TO_8 != 0)
-    {
-        size += ALIGNED_TO_8- (size % ALIGNED_TO_8);
-    }
-    MallocMetadata *old_meta_pointer = meta_address_from_block(oldp);
+    /// cond1 = 0
+    Meta_Data_Struct* metaData = (Meta_Data_Struct*)mm_block;
+    metaData->md_size = md_size;
 
-    //mmap realloc
-    bool cond1 = size >= MMAP_MIN_SIZE;
-    if (cond1)
-    {
-        return mmap_reallocation(size,oldp,old_meta_pointer);
-    }
+    bool false_flag = false;
+    metaData->md_is_free = false_flag;
 
-
-    // reg
-    bool cond2 = size<=old_meta_pointer->size;
+    bool cond2 = !list_of_mmap;
     if (cond2)
     {
-        return reg_reallocation(size,old_meta_pointer,oldp);
+        list_of_mmap = metaData;
+        metaData->md_next =  nullptr;
+        cond2 ++;
+        metaData->md_prev = nullptr;
+    }
+    else
+    {
+        /// cond2 = 0
+        Meta_Data_Struct* md_cond2 = list_of_mmap;
+        /// get forward with md
+        while (md_cond2->md_next)
+        {
+            md_cond2 = md_cond2->md_next;
+        }
+
+        metaData->md_prev = md_cond2;
+
+        Meta_Data_Struct* metaData_cond2 = metaData;
+        md_cond2->md_next = metaData_cond2;
     }
 
-    // try join prev
-    MallocMetadata *old_p_prev_block = old_meta_pointer->prev;
-    bool cond3 = old_p_prev_block->is_free;
-    if (old_p_prev_block != nullptr && cond3)
-    {
-        size_t old_meta_pointer_prev_size = old_meta_pointer->prev->size;
-        size_t slot_with_prev = old_meta_pointer_prev_size + meta_data_size + old_meta_pointer->size;
-        bool cond4 = slot_with_prev >= size;
+    Meta_Data_Struct* return_value = metaData;
+    return_value += 1;
+    return return_value;
+}
+
+void merge_not_in_use(Meta_Data_Struct* meta_data_ptr)
+{
+    /// done
+    /// merge
+    Meta_Data_Struct* metaData_next = meta_data_ptr->md_next;
+    Meta_Data_Struct* next_block = metaData_next;
+
+    bool ans1 = (next_block != nullptr);
+    if (ans1 && next_block->md_is_free){
+        /// only if cond1 happens
+        bool cond2 = 1;
+        bool cond3 = 1;
+
+        /// check cond2 and cond3
+        if (cond2 == cond3)
+        {
+            bin_Remove(meta_data_ptr);
+            bin_Remove(next_block);
+        }
+
+        /// after 2 removes
+        size_t next_block_size_PLUS_MD_SIZE = next_block->md_size + METADATA_SIZE;
+        meta_data_ptr->md_size += next_block_size_PLUS_MD_SIZE;
+
+        Meta_Data_Struct* next_block_cond1 = next_block;
+        meta_data_ptr->md_next = next_block_cond1->md_next;
+
+        bool cond4 = (next_block->md_next != nullptr);
         if (cond4)
         {
-            remove_block_from_bin_hist(old_p_prev_block);
-
-            number_of_free_block-=1;
-            number_of_free_bytes =number_of_free_bytes- old_p_prev_block->size;
-            number_of_allocated_blocks-=1;
-            number_of_allocated_bytes =number_of_allocated_bytes+ meta_data_size;
-            number_of_metadata_bytes =number_of_metadata_bytes- meta_data_size;
-
-            old_p_prev_block->size = slot_with_prev;
-            old_p_prev_block->is_free = false;
-
-            old_p_prev_block->next = old_meta_pointer->next;
-            bool cond5 = old_meta_pointer->next != nullptr;
-            if (cond5)
-            {
-                old_meta_pointer->next->prev = old_p_prev_block;
-            }
-            else
-            {
-                tail = old_p_prev_block;
-            }
-
-            void *destination = block_address_from_meta(old_p_prev_block);
-            memmove(destination, oldp, old_meta_pointer->size);
-
-            unsigned long u_l_size = (unsigned long)size;
-            unsigned long u_l_meta_data_size = (unsigned long)meta_data_size;
-            unsigned long u_l_old_p_prev_block_size = (unsigned long)old_p_prev_block->size ;
-            bool ans1 = ((unsigned long)old_p_prev_block->size >= u_l_size+u_l_meta_data_size);
-            bool ans2= (u_l_old_p_prev_block_size - size - meta_data_size >= LARGE_KB);
-            bool cond6 = ans1 && ans2;
-            if (cond6)
-            {
-                split_block_by_size(old_p_prev_block, size);
-
-                number_of_free_block+=1;
-                number_of_free_bytes =number_of_free_bytes+ old_p_prev_block->next->size;
-                number_of_allocated_blocks+=1;
-                number_of_allocated_bytes =number_of_allocated_bytes- meta_data_size;
-                number_of_metadata_bytes =number_of_metadata_bytes+ meta_data_size;
-            }
-            return block_address_from_meta(old_p_prev_block);
+            /// if cond4 happened
+            Meta_Data_Struct* next_block_next = next_block->md_next;
+            next_block_next->md_prev = meta_data_ptr;
         }
+
+        bin_Insert(meta_data_ptr);
     }
 
-    // try join next
-    MallocMetadata *next_block_pointer = old_meta_pointer->next;
-    bool cond7 = next_block_pointer != nullptr && next_block_pointer->is_free;
-    if (cond7)
-    {
-        unsigned long u_l_old_p_next_block_size = (unsigned long)old_meta_pointer->next->size;
-        size_t slot_with_next = u_l_old_p_next_block_size + meta_data_size + old_meta_pointer->size;
-        bool cond8 = slot_with_next >= size;
-        if (cond8)
+
+    // Merge with previous block if it's free
+    Meta_Data_Struct* previous_Block = meta_data_ptr->md_prev;
+    int ans2 = (previous_Block != nullptr);
+    if (ans2 && previous_Block->md_is_free) {
+        if (ans2)
         {
-            remove_block_from_bin_hist(next_block_pointer);
-
-            number_of_free_block-1;
-            number_of_free_bytes =number_of_free_bytes -  next_block_pointer->size;
-            number_of_allocated_blocks-=1;
-            number_of_allocated_bytes =number_of_allocated_bytes+ meta_data_size;
-            number_of_metadata_bytes =number_of_metadata_bytes- meta_data_size;
-
-            old_meta_pointer->size = slot_with_next;
-
-            old_meta_pointer->next = next_block_pointer->next;
-            bool cond9 = next_block_pointer->next != nullptr;
-            if (cond9)
-            {
-                next_block_pointer->next->prev = old_meta_pointer;
-            }
-            else
-            {
-                tail = old_meta_pointer;
-            }
-            unsigned long u_l_size = (unsigned long)size;
-            unsigned long u_l_meta_data_size = (unsigned long)meta_data_size;
-            unsigned long u_l_old_meta_pointer_size = (unsigned long)old_meta_pointer->size;
-            bool ans1 = ((unsigned long)old_meta_pointer->size >= u_l_size+u_l_meta_data_size);
-            bool ans2=(u_l_old_meta_pointer_size - size - meta_data_size>= LARGE_KB);
-            bool cond10 = ans1&&ans2;
-            if (cond10)
-            {
-                split_block_by_size(old_meta_pointer, size);
-
-                number_of_free_block += 1;
-                number_of_free_bytes =number_of_free_bytes + old_meta_pointer->next->size;
-                number_of_allocated_blocks += 1;
-                number_of_allocated_bytes =number_of_allocated_bytes - meta_data_size;
-                number_of_metadata_bytes =number_of_metadata_bytes+ meta_data_size;
-            }
-            return oldp;
+            bin_Remove(previous_Block);
+            bin_Remove(meta_data_ptr);
         }
-    }
+        size_t metaData_size_PLUS_MD_SIZE = meta_data_ptr->md_size + METADATA_SIZE;
+        previous_Block->md_size += metaData_size_PLUS_MD_SIZE;
 
-    // prev try
-    bool cond11 = old_p_prev_block != nullptr && old_p_prev_block->is_free &&
-                  next_block_pointer != nullptr  && next_block_pointer->is_free;
-    if (cond11)
-    {
-        unsigned long u_l_old_meta_pointer_next_size = (unsigned long)old_meta_pointer->next->size;
-        unsigned long u_l_old_meta_pointer_prev_size = (unsigned long)old_meta_pointer->prev->size;
-        size_t next_and_prev_block = u_l_old_meta_pointer_prev_size +
-                                     u_l_old_meta_pointer_next_size +
-                                     2 * meta_data_size + old_meta_pointer->size;
-        bool cond12 = size<=next_and_prev_block;
-        if (cond12)
+        /// check if works
+        previous_Block->md_next = meta_data_ptr->md_next;
+
+        bool cond6 = (meta_data_ptr->md_next != nullptr);
+        if (cond6)
         {
-            remove_block_from_bin_hist(old_p_prev_block);
-            remove_block_from_bin_hist(next_block_pointer);
+            meta_data_ptr->md_next->md_prev = previous_Block;
+        }
+
+        /// success
+        bin_Insert(previous_Block);
+    }
+}
+
+void split_block_by_size(Meta_Data_Struct* meta_data_ptr, size_t size)
+{
+    /// split
+    /// this function split
+    size_t metaData_size_MINUS_requested_size = meta_data_ptr->md_size - size;
+    int cond_1 = (metaData_size_MINUS_requested_size < (SPLIT_MINIMUN + METADATA_SIZE));
+    if(cond_1) {
+        return;
+    }
+
+    unsigned long address = (size_t)meta_data_ptr + METADATA_SIZE + size;
+    Meta_Data_Struct* newMataData = (Meta_Data_Struct*)(address);
 
 
+    newMataData->md_next_free = nullptr;
 
-            number_of_free_block =number_of_free_block - 2;
+    bool true_bool = true;
+    newMataData->md_is_free = true_bool;
 
-            size_t next_block_pointer_size = next_block_pointer->size;
-            size_t prev_block_pointer_size = old_p_prev_block->size;
-            number_of_free_bytes = number_of_free_bytes - next_block_pointer_size - prev_block_pointer_size;
+    newMataData->md_prev_free = nullptr;
 
-            number_of_allocated_blocks =number_of_allocated_blocks- 2;
-            number_of_allocated_bytes =number_of_allocated_bytes+ 2 * meta_data_size;
-            number_of_metadata_bytes =number_of_metadata_bytes- 2 * meta_data_size;
+    size_t temp = meta_data_ptr->md_size - size;
+    newMataData->md_size = temp - METADATA_SIZE;
 
-            old_p_prev_block->size = next_and_prev_block;
-            old_p_prev_block->is_free = false;
+    bool cond_2 = (meta_data_ptr->md_next != nullptr);
+    if (cond_2)
+    {
+        int counter_cond1 = 0;
+        Meta_Data_Struct* metaData_next = meta_data_ptr->md_next;
+        Meta_Data_Struct* nextMetaData = metaData_next;
 
-            old_p_prev_block->next = next_block_pointer->next;
-            bool cond13 = old_p_prev_block->next != nullptr;
-            if (cond13)
+        counter_cond1++;
+        bool cond_3 = nextMetaData->md_is_free;
+        if (cond_3)
+        {
+            int counter_cond2 = 0;
+            size_t nextMetaData_size = nextMetaData->md_size;
+            size_t nextMetaData_size_PLUS_md_size = METADATA_SIZE + nextMetaData_size;
+            newMataData->md_size += nextMetaData_size_PLUS_md_size;
+
+            counter_cond2++;
+            if (counter_cond2)
             {
-                old_p_prev_block->next->prev = old_p_prev_block;
+                counter_cond2+= 1;
             }
-            else
+
+            newMataData->md_next = nextMetaData->md_next;
+
+            bool cond_3 = (nextMetaData->md_next != nullptr);
+            if(cond_3)
             {
-                tail = old_p_prev_block;
+                nextMetaData->md_next->md_prev = newMataData;
             }
-
-
-            void *destination = block_address_from_meta(old_p_prev_block);
-            memmove(destination, oldp, old_meta_pointer->size);
-
-            unsigned long u_l_size = (unsigned long)size;
-            unsigned long u_l_meta_data_size = (unsigned long)meta_data_size;
-            unsigned long u_l_old_p_prev_block_size = (unsigned long)old_p_prev_block->size;
-            bool ans1 = (u_l_old_p_prev_block_size >= u_l_size+ u_l_meta_data_size);
-            bool ans2=(old_p_prev_block->size - size - meta_data_size >= LARGE_KB);
-            bool cond14 = ans1&& ans2;
-            if (cond14)
-            {
-                split_block_by_size(old_p_prev_block, size);
-
-                number_of_free_block+=1;
-                number_of_free_bytes =number_of_free_bytes+ old_p_prev_block->next->size;
-                number_of_allocated_blocks+=1;
-                number_of_allocated_bytes =number_of_allocated_bytes- meta_data_size;
-                number_of_metadata_bytes =number_of_metadata_bytes+ meta_data_size;
-            }
-            return block_address_from_meta(old_p_prev_block);
+            counter_cond2 += 2;
+            bin_Remove(nextMetaData);
+        }
+        else
+        {
+            Meta_Data_Struct* nextMetaData_cond2_else = nextMetaData;
+            newMataData->md_next = nextMetaData;
+            counter_cond1 += 1;
+            nextMetaData->md_prev = newMataData;
         }
     }
 
-    //wild case
-    bool cond15 = tail == old_meta_pointer;
-    if(cond15){
-        tail->is_free = true;
+    Meta_Data_Struct* metaData_end = meta_data_ptr;
+    newMataData->md_prev = metaData_end;
+
+    Meta_Data_Struct* newMataData_end = newMataData;
+    meta_data_ptr->md_next = newMataData_end;
+
+    int end_counter = 1;
+    int end_counter_1 = 1;
+    if (end_counter == end_counter_1)
+    {
+        meta_data_ptr->md_size = size;
+        bin_Insert(newMataData);
     }
-    size_t old_ptr_size = old_meta_pointer->size;
-    void *destination = smalloc(size);
-    if (destination == nullptr)
+}
+
+void* mmap_srealloction(void* old_ptr, size_t param_size)
+{
+    Meta_Data_Struct* tmp_oldp = (Meta_Data_Struct*)old_ptr - 1;
+    Meta_Data_Struct* old_meta_data_pointer = tmp_oldp;
+
+    int counter = 0;
+    bool cond1 = (old_meta_data_pointer->md_next != nullptr);
+    if (cond1)
+    {
+        Meta_Data_Struct* old_meta_data_pointer_next =old_meta_data_pointer->md_next;
+        old_meta_data_pointer_next->md_prev = old_meta_data_pointer->md_prev;
+        counter++;
+    }
+
+    bool cond2 = (old_meta_data_pointer->md_prev != nullptr);
+    if (cond2)
+    {
+        Meta_Data_Struct* old_meta_data_pointer_prev =old_meta_data_pointer->md_prev;
+        old_meta_data_pointer_prev->md_next = old_meta_data_pointer->md_next;
+        counter++;
+    }
+    else
+    {
+        Meta_Data_Struct* old_meta_data_pointer_next = old_meta_data_pointer->md_next;
+        list_of_mmap = old_meta_data_pointer_next;
+        counter++;
+    }
+
+    size_t parameter_to_mmap_smalloc = param_size;
+    void* new_pointer = mmap_smalloction(parameter_to_mmap_smalloc);
+    size_t old_meta_data_pointer_size = old_meta_data_pointer->md_size;
+    bool cond3 = (param_size < old_meta_data_pointer_size);
+    if (cond3)
+    {
+        counter++;
+        memmove(new_pointer, old_ptr, param_size);
+    }
+    else
+    {
+        /// cond3 ==0
+        counter--;
+        size_t old_meta_data_pointer_size = old_meta_data_pointer->md_size;
+        memmove(new_pointer, old_ptr, old_meta_data_pointer_size);
+    }
+    size_t old_meta_data_pointer_size_PLUS_MD_SIZE = old_meta_data_pointer->md_size + METADATA_SIZE;
+    munmap(old_ptr, old_meta_data_pointer_size_PLUS_MD_SIZE);
+    return new_pointer;
+}
+
+void align_memory(size_t* size){
+    *size += ((8 - (*size % 8)) % 8);
+}
+///functions
+
+void* smalloc(size_t size) {
+    align_memory(&size);
+    bool cond1 =(size <= MINIMUM_SIZE);
+    bool cond2 =(size > MAXIMUM_SIZE);
+    if (cond1 || cond2)
+        return nullptr;
+
+    bool cond3 = (size >= LARGE_ALLOCATION);
+    if (cond3){
+        return mmap_smalloction(size);
+    }
+    if (list_of_memory_allocation != nullptr)
+    {
+        int bin_size = 128;
+        for (int index = bin_Index(size); index < bin_size; index++)
+        {
+            Meta_Data_Struct* pMetaData = bins[index];
+            while (pMetaData != nullptr)
+            {
+                size_t meta_data_size = pMetaData->md_size;
+                if (meta_data_size >= size)
+                {
+                    pMetaData->md_is_free = false;
+                    bin_Remove(pMetaData);
+                    split_block_by_size(pMetaData, size);
+                    return pMetaData + 1;
+                }
+                pMetaData = pMetaData->md_next_free;
+            }
+        }
+
+        int block_counter = 0;
+        Meta_Data_Struct* wild_chunk = list_of_memory_allocation;
+        //todo: make sure this is the wild chunk
+        while (wild_chunk->md_next)
+        {
+            wild_chunk = wild_chunk->md_next;
+            block_counter++;
+        }
+        if (wild_chunk->md_is_free)
+        {
+            Meta_Data_Struct* block_before_wc = wild_chunk->md_prev;
+            if (block_before_wc != nullptr && block_before_wc->md_is_free) ///merge down if we can
+            {
+                void* new_heap_pointer = sbrk(size - wild_chunk->md_size - block_before_wc->md_size - sizeof(Meta_Data_Struct));
+                if (new_heap_pointer == (void*)(-1))
+                    return nullptr;
+
+                bin_Remove(block_before_wc);
+                bin_Remove(wild_chunk);
+
+                block_before_wc->md_is_free = false;
+                wild_chunk->md_is_free = false;
+
+                block_before_wc->md_next = nullptr;
+                block_before_wc->md_size = size;
+
+                return block_before_wc + 1;
+            }
+            ///
+            /// in case we can't merge down
+            ///
+
+            void* new_heap_pointer = sbrk(size - wild_chunk->md_size);
+            if (new_heap_pointer == (void*)(-1)) {
+                return nullptr;
+            }bin_Remove(wild_chunk);
+            wild_chunk->md_is_free = false;
+            wild_chunk->md_size = size;
+            return wild_chunk + 1;
+        }
+    }
+
+    int wanted_size = size + sizeof(Meta_Data_Struct);
+    Meta_Data_Struct* new_meta_data = (Meta_Data_Struct*)sbrk(wanted_size);
+    if (new_meta_data == (void*)(-1))
     {
         return nullptr;
     }
-    bool cond16 = destination == block_address_from_meta(tail)&&(tail == old_meta_pointer);
-    if(cond16)
+
+    new_meta_data->md_is_free = false;
+    new_meta_data->md_size = size;
+    new_meta_data->md_next = new_meta_data->md_prev = nullptr;
+
+    if (list_of_memory_allocation == nullptr)
     {
-        number_of_free_block+=1;
-        number_of_free_bytes =number_of_free_bytes+ old_ptr_size;
+        list_of_memory_allocation = new_meta_data;
+    }
+    else
+    {
+        int counter = 0;
+        Meta_Data_Struct* final_md_in_list = list_of_memory_allocation;
+        ///note: this pointer is not yet the last one
+        ///      but we gonna make him the lsat one
+        while (final_md_in_list->md_next)
+        {
+            counter++;
+            final_md_in_list = final_md_in_list->md_next;
+        }
+        new_meta_data->md_prev = final_md_in_list;
+        final_md_in_list->md_next = new_meta_data;
+    }
+
+
+    return new_meta_data + 1;
+}
+
+
+
+void* scalloc(size_t num, size_t size)
+{
+    size_t alloc_size = num * size;
+    align_memory(&alloc_size);
+
+    void* address_of_allocation = smalloc(alloc_size);
+
+    if (address_of_allocation == nullptr) {//make sure the allocation did not fail
+        return nullptr;
+    }
+    else {
+        size_t godel = num * size;
+        int wanted_size = 0;
+        return memset(address_of_allocation, wanted_size, alloc_size);}
+}
+
+void sfree(void* p) {
+    if (p == nullptr) {
+        return; }
+    Meta_Data_Struct* meta_data = (Meta_Data_Struct*)p - 1;
+
+    bool cond1 = (meta_data->md_size < LARGE_ALLOCATION);
+
+
+    if (meta_data->md_is_free) {
+        return; }
+
+    else if (cond1)
+    {
+        meta_data->md_is_free = true;
+        bin_Insert(meta_data);
+        merge_not_in_use(meta_data);
+    }
+    else
+    {
+
+        bool has_prev = meta_data->md_prev != nullptr;
+        if (has_prev)
+        {
+            meta_data->md_prev->md_next = meta_data->md_next;
+        }
+        else
+        {
+            Meta_Data_Struct*next = meta_data->md_next;
+            list_of_mmap = next;
+        }
+        bool has_next = meta_data->md_next != nullptr;
+        if (has_next)
+        {
+            meta_data->md_next->md_prev = meta_data->md_prev;
+        }
+        size_t size_md = meta_data->md_size + METADATA_SIZE;
+        munmap(p, size_md);
+    }
+}
+
+void* srealloc(void* oldp, size_t size) {
+    align_memory(&size);
+    bool cond1 = (size <= MINIMUM_SIZE);
+    bool cond2 = (size > MAXIMUM_SIZE);
+    if (cond1 || cond2) {
+        return nullptr;
+    }
+
+    bool oldP_is_null =(oldp == nullptr);
+    if (oldP_is_null) {
+        return smalloc(size); }
+
+    bool valid_size =(size >= LARGE_ALLOCATION);
+    if (valid_size) {
+        return mmap_srealloction(oldp, size); }
+
+    Meta_Data_Struct* old_meta_data = (Meta_Data_Struct*) oldp - 1;
+
+    Meta_Data_Struct* after_meta_data = old_meta_data->md_next;
+    Meta_Data_Struct* before_meta_data = old_meta_data->md_prev;
+
+    bool before_meta_data_is_free = before_meta_data != nullptr && before_meta_data->md_is_free ;
+    bool before_meta_data_has_enought_size = before_meta_data != nullptr && before_meta_data->md_size + old_meta_data->md_size + METADATA_SIZE >= size;
+
+    bool after_meta_data_is_free = after_meta_data != nullptr && after_meta_data->md_is_free;
+    bool after_meta_data_has_enought_size = after_meta_data != nullptr && after_meta_data->md_size + old_meta_data->md_size + METADATA_SIZE >= size;
+
+    size_t size_of_old_md = old_meta_data->md_size;
+    if (size_of_old_md >= size)
+    {
+        old_meta_data->md_is_free = false;
+        ///has enough size so split
+        split_block_by_size(old_meta_data, size);
         return oldp;
     }
 
-    memmove(destination, oldp, old_meta_pointer->size);
-    sfree(oldp);
-    return destination;
+    else if (before_meta_data_is_free && before_meta_data_has_enought_size)
+    {
+        bin_Remove(before_meta_data);
+        before_meta_data->md_next = old_meta_data->md_next;
+        if (old_meta_data->md_next != nullptr)
+        {
+            ///set prev of next if we can
+            old_meta_data->md_next->md_prev = before_meta_data;
+        }
+        before_meta_data->md_is_free = false;
+        before_meta_data->md_size += old_meta_data->md_size + METADATA_SIZE;
+
+        memmove(before_meta_data + 1, oldp, old_meta_data->md_size); ///move the data to where we want
+        split_block_by_size(before_meta_data, size);
+        return before_meta_data + 1;
+    }
+
+    else if (after_meta_data_is_free && after_meta_data_has_enought_size)
+    {
+        bin_Remove(after_meta_data);
+        old_meta_data->md_next = after_meta_data->md_next;
+        if (after_meta_data->md_next != nullptr)
+        {
+            ///set prev of next if we can
+            after_meta_data->md_next->md_prev = old_meta_data;
+        }
+        after_meta_data->md_is_free = false;
+        old_meta_data->md_size += after_meta_data->md_size + METADATA_SIZE;
+
+        split_block_by_size(old_meta_data, size);
+        return old_meta_data + 1;
+    }
+
+    else if (before_meta_data_is_free && after_meta_data_is_free &&
+             before_meta_data->md_size + old_meta_data->md_size + after_meta_data->md_size + 2*METADATA_SIZE >= size)
+    {
+
+        bin_Remove(after_meta_data);
+        bin_Remove(before_meta_data);
+
+        before_meta_data->md_next = after_meta_data->md_next;
+        before_meta_data->md_is_free = after_meta_data->md_is_free = false;
+
+        if (after_meta_data->md_next != nullptr)
+        {
+            after_meta_data->md_next->md_prev = before_meta_data;
+        }
+        before_meta_data->md_size += old_meta_data->md_size + after_meta_data->md_size + 2*METADATA_SIZE;
+
+        memmove(before_meta_data + 1, oldp, old_meta_data->md_size);
+        split_block_by_size(before_meta_data, size);
+        return before_meta_data + 1;
+    }
+
+    else if (old_meta_data->md_next == nullptr) {
+        if (before_meta_data != nullptr && before_meta_data->md_is_free){ ///merge down if we can
+            void* enlarge = sbrk(size - old_meta_data->md_size - before_meta_data->md_size - sizeof(Meta_Data_Struct));
+            if (enlarge == (void*)(-1))
+                return nullptr;
+
+            bin_Remove(before_meta_data);
+            bin_Remove(old_meta_data);
+
+            before_meta_data->md_is_free = false;
+            old_meta_data->md_is_free = false;
+
+            before_meta_data->md_next = nullptr;
+            before_meta_data->md_size = size;
+
+            memmove(before_meta_data + 1, oldp, old_meta_data->md_size);
+
+            return before_meta_data + 1;
+        }
+
+        void* new_heap_pointer = sbrk(size - old_meta_data->md_size);
+        if (new_heap_pointer == (void*)(-1)) {
+            return nullptr;
+        }
+
+        old_meta_data->md_size = size;
+        return old_meta_data + 1;
+    }
+
+    else
+    {
+        void* address_of_new_allocation = smalloc(size);
+        if (address_of_new_allocation == nullptr) {
+            return nullptr;}
+
+        memmove(address_of_new_allocation, oldp, old_meta_data->md_size);
+        bin_Insert(old_meta_data);
+        old_meta_data->md_is_free = true;
+        return address_of_new_allocation;
+    }
 }
 
-size_t _num_free_blocks()
-{
-    return number_of_free_block;
+
+
+
+size_t _num_free_blocks() {
+    size_t block_counter = 0;
+    int bin_size = 128;
+    for (int ind = 0; ind < bin_size; ind++)
+    {
+        Meta_Data_Struct* meta_data = bins[ind];
+        while (meta_data != nullptr)
+        {
+            meta_data = meta_data->md_next_free;
+            block_counter +=1;
+        }
+    }
+    return block_counter;
 }
 
 size_t _num_free_bytes()
 {
-    return number_of_free_bytes;
+    size_t counter_of_free_bytes = 0;
+    int bin_size = 128;
+    for (int ind = 0; ind <bin_size; ind++)
+    {
+        Meta_Data_Struct* meta_data = bins[ind];
+        while (meta_data != nullptr)
+        {
+            counter_of_free_bytes += meta_data->md_size;
+            meta_data = meta_data->md_next_free;
+        }
+    }
+    return counter_of_free_bytes;
 }
 
 size_t _num_allocated_blocks()
 {
-    return number_of_allocated_blocks;
+    size_t allocated_blocks_counter = 0;
+
+    if (list_of_mmap != nullptr)
+    {
+        for (Meta_Data_Struct* meta_data = list_of_mmap; meta_data != nullptr; meta_data = meta_data->md_next)
+        {
+            allocated_blocks_counter++;
+        }
+    }
+    if (list_of_memory_allocation != nullptr)
+    {
+        for (Meta_Data_Struct* meta_data = list_of_memory_allocation; meta_data != nullptr; meta_data = meta_data->md_next)
+        {
+            allocated_blocks_counter++;
+        }
+    }
+    return allocated_blocks_counter;
 }
 
 size_t _num_allocated_bytes()
 {
-    return number_of_allocated_bytes;
-}
-
-size_t _num_meta_data_bytes()
-{
-    return number_of_metadata_bytes;
+    size_t counter_of_allocated_bytes = 0;
+    if (list_of_memory_allocation != nullptr)
+    {
+        for (Meta_Data_Struct* meta_data = list_of_memory_allocation; meta_data != nullptr; meta_data = meta_data->md_next)
+        {
+            counter_of_allocated_bytes += meta_data->md_size;
+        }
+    }
+    if (list_of_mmap != nullptr)
+    {
+        for (Meta_Data_Struct* meta_data = list_of_mmap; meta_data != nullptr; meta_data = meta_data->md_next)
+        {
+            counter_of_allocated_bytes += meta_data->md_size;
+        }
+    }
+    return counter_of_allocated_bytes;
 }
 
 size_t _size_meta_data()
 {
-    return meta_data_size;
+    return sizeof(Meta_Data_Struct);
+}
+
+size_t _num_meta_data_bytes()
+{
+    return _num_allocated_blocks() * _size_meta_data();
 }
