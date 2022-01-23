@@ -27,8 +27,6 @@ MetaData* memory_list = nullptr;
 MetaData* mmap_list = nullptr;
 MetaData* histogram[128];
 
-/* ================= Helper Functions ================== */
-
 int histIndex (size_t size)
 {
     /// done
@@ -58,13 +56,17 @@ void histRemove(MetaData* md)
     }
     else
     {
-        int index_hist = histIndex(md_param->size);
-        histogram[index_hist] = md_param->next_free;
+        int histIndex_md_param_size_ = histIndex(md_param->size);
+        int index_hist = histIndex_md_param_size_;
+
+        MetaData* md_param_next_free = md_param->next_free;
+        histogram[index_hist] = md_param_next_free;
     }
     bool cond_2 = (md_param->next_free != nullptr);
     if (cond_2)
     {
-        md_param->next_free->prev_free = md_param->prev_free;
+        MetaData* md_param_prev_free = md_param->prev_free;
+        md_param->next_free->prev_free = md_param_prev_free;
     }
     md_param->prev_free = nullptr;
     md_param->next_free = nullptr;
@@ -86,9 +88,11 @@ void histInsert (MetaData* md)
     }
     else
     {
-        bool is_inserted = false;
+        bool is_inserted_flag;
+        is_inserted_flag = false;
         MetaData* current_md = slot_hist_by_index;
-        while (slot_hist_by_index != nullptr) {
+        while (slot_hist_by_index != nullptr)
+        {
             int slot_hist_by_index_size = slot_hist_by_index->size;
             bool cond_2 = (slot_hist_by_index_size >= md_param_size);
             if (cond_2)
@@ -97,34 +101,55 @@ void histInsert (MetaData* md)
                 bool cond_3 = (slot_hist_by_index_prev_free == nullptr);
                 if (cond_3)
                 {
-                    histogram[index_hist] = md_param;
-                    md_param->next_free = slot_hist_by_index;
-                    md_param->prev_free = nullptr;
-                    slot_hist_by_index->prev_free = md_param;
-                    is_inserted = true ;
+                    MetaData* md_param_cond_3 = md_param;
+
+                    histogram[index_hist] = md_param_cond_3;
+                    md_param_cond_3->next_free = slot_hist_by_index;
+                    md_param_cond_3->prev_free = nullptr;
+                    slot_hist_by_index->prev_free = md_param_cond_3;
+                    is_inserted_flag = true ;
                     break;
                 }
-                else {
-                    slot_hist_by_index->prev_free->next_free = md_param;
-                    md_param->prev_free = slot_hist_by_index->prev_free;
-                    slot_hist_by_index->prev_free = md_param;
-                    md_param->next_free = slot_hist_by_index ;
-                    is_inserted = true;
+                else
+                {
+                    MetaData* md_param_cond_3_else = md_param;
+                    MetaData* slot_hist_by_index_prev_free = slot_hist_by_index->prev_free;
+                    /// here change md_param to md_param_cond_3_else
+
+                    slot_hist_by_index_prev_free->next_free = md_param_cond_3_else;
+                    md_param_cond_3_else->prev_free = slot_hist_by_index_prev_free;
+                    int counter_cond_4 = 0;
+                    slot_hist_by_index_prev_free = md_param_cond_3_else;
+                    md_param_cond_3_else->next_free = slot_hist_by_index ;
+                    is_inserted_flag = true;
                     break;
+                    counter_cond_4++;
                 }
             }
             current_md = slot_hist_by_index ;
-            slot_hist_by_index = slot_hist_by_index->next_free;
+            MetaData* slot_hist_by_index_next_free = slot_hist_by_index->next_free;
+            slot_hist_by_index = slot_hist_by_index_next_free;
         }
-        if (!is_inserted) {
-            current_md->next_free = md_param;
-            md_param->prev_free = current_md ;
-            md_param->next_free = nullptr;
+
+        bool cond_4 = (!is_inserted_flag);
+        int counter_4 = 0;
+        if (cond_4)
+        {
+            MetaData* md_param_cond4 = md_param;
+            current_md->next_free = md_param_cond4;
+            if (counter_4)
+            {
+                counter_4++;
+            }
+            md_param_cond4->prev_free = current_md ;
+            md_param_cond4->next_free = nullptr;
         }
     }
 }
 
-void split(MetaData* metaData, size_t requested_size) {
+void split(MetaData* metaData, size_t requested_size)
+{
+    /// this function split
     if(metaData->size - requested_size < SPLIT_MIN + MD_SIZE) {
         return;
     }
@@ -153,11 +178,6 @@ void split(MetaData* metaData, size_t requested_size) {
 
     newMataData->prev = metaData;
     metaData->next = newMataData;
-//    newMataData->next = metaData->next;
-//
-//    if (newMataData->next != nullptr) {
-//        newMataData->next->prev = newMataData;
-//    }
     metaData->size = requested_size;
     histInsert(newMataData);
 }
