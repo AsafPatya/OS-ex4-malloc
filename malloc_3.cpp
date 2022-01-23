@@ -30,7 +30,7 @@ MetaData* histogram[128];
 int histIndex (size_t size)
 {
     /// done
-    int size_par = size;
+    size_t size_par = size;
     int index = 0;
     int const_128 = 128;
     while (index < const_128)
@@ -56,8 +56,8 @@ void histRemove(MetaData* md)
     }
     else
     {
-        int histIndex_md_param_size_ = histIndex(md_param->size);
-        int index_hist = histIndex_md_param_size_;
+        int histIndex_md_param_size = histIndex(md_param->size);
+        int index_hist = histIndex_md_param_size;
 
         MetaData* md_param_next_free = md_param->next_free;
         histogram[index_hist] = md_param_next_free;
@@ -75,7 +75,7 @@ void histRemove(MetaData* md)
 void histInsert (MetaData* md)
 {
     MetaData* md_param = md;
-    int md_param_size = md_param->size;
+    size_t md_param_size = md_param->size;
     int index_hist = histIndex(md_param_size);
     MetaData* slot_hist_by_index = histogram[index_hist];
 
@@ -93,7 +93,7 @@ void histInsert (MetaData* md)
         MetaData* current_md = slot_hist_by_index;
         while (slot_hist_by_index != nullptr)
         {
-            int slot_hist_by_index_size = slot_hist_by_index->size;
+            size_t slot_hist_by_index_size = slot_hist_by_index->size;
             bool cond_2 = (slot_hist_by_index_size >= md_param_size);
             if (cond_2)
             {
@@ -150,36 +150,80 @@ void histInsert (MetaData* md)
 void split(MetaData* metaData, size_t requested_size)
 {
     /// this function split
-    if(metaData->size - requested_size < SPLIT_MIN + MD_SIZE) {
+    size_t metaData_size_MINUS_requested_size = metaData->size - requested_size;
+    int cond_1 = (metaData_size_MINUS_requested_size < (SPLIT_MIN + MD_SIZE));
+    if(cond_1) {
         return;
     }
 
-    MetaData* newMataData = (MetaData*)((size_t)metaData + MD_SIZE + requested_size);
-    newMataData->is_free = true;
-    newMataData->next_free = nullptr;
-    newMataData->prev_free = nullptr;
-    newMataData->size = metaData->size - requested_size - MD_SIZE;
+    unsigned long address = (size_t)metaData + MD_SIZE + requested_size;
+    MetaData* newMataData = (MetaData*)(address);
 
-    if (metaData->next != nullptr){
-        MetaData* nextMetaData = metaData->next;
-        if (nextMetaData->is_free){
-            newMataData->size += MD_SIZE + nextMetaData->size;
+
+    newMataData->next_free = nullptr;
+
+    bool true_bool = true;
+    newMataData->is_free = true_bool;
+
+    newMataData->prev_free = nullptr;
+
+    size_t temp = metaData->size - requested_size;
+    newMataData->size = temp - MD_SIZE;
+
+    bool cond_2 = (metaData->next != nullptr);
+    if (cond_2)
+    {
+        int counter_cond1 = 0;
+        MetaData* metaData_next = metaData->next;
+        MetaData* nextMetaData = metaData_next;
+
+        counter_cond1++;
+        bool cond_3 = nextMetaData->is_free;
+        if (cond_3)
+        {
+            int counter_cond2 = 0;
+            size_t nextMetaData_size = nextMetaData->size;
+            size_t nextMetaData_size_PLUS_md_size = MD_SIZE + nextMetaData_size;
+            newMataData->size += nextMetaData_size_PLUS_md_size;
+
+            counter_cond2++;
+            if (counter_cond2)
+            {
+                counter_cond2+= 1;
+            }
+
             newMataData->next = nextMetaData->next;
-            if(nextMetaData->next != nullptr){
+
+            bool cond_3 = (nextMetaData->next != nullptr);
+            if(cond_3)
+            {
                 nextMetaData->next->prev = newMataData;
             }
+            counter_cond2 += 2;
             histRemove(nextMetaData);
         }
-        else{
+        else
+        {
+            MetaData* nextMetaData_cond2_else = nextMetaData;
             newMataData->next = nextMetaData;
+            counter_cond1 += 1;
             nextMetaData->prev = newMataData;
         }
     }
 
-    newMataData->prev = metaData;
-    metaData->next = newMataData;
-    metaData->size = requested_size;
-    histInsert(newMataData);
+    MetaData* metaData_end = metaData;
+    newMataData->prev = metaData_end;
+
+    MetaData* newMataData_end = newMataData;
+    metaData->next = newMataData_end;
+
+    int end_counter = 1;
+    int end_counter_1 = 1;
+    if (end_counter == end_counter_1)
+    {
+        metaData->size = requested_size;
+        histInsert(newMataData);
+    }
 }
 
 void merge(MetaData* metaData) {
