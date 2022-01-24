@@ -179,7 +179,6 @@ void* mmap_smalloction(size_t md_size)
     {
         list_of_mmap = metaData;
         metaData->md_next =  nullptr;
-        cond2 ++;
         metaData->md_prev = nullptr;
     }
     else
@@ -397,13 +396,14 @@ void* mmap_srealloction(void* old_ptr, size_t param_size)
     return new_pointer;
 }
 
-void align_memory(size_t* size){
-    *size += ((8 - (*size % 8)) % 8);
+void function_to_align_memory(size_t* size){
+    size_t temp = ((8 - (*size % 8)) % 8);
+    *size += temp;
 }
 ///functions
 
 void* smalloc(size_t size) {
-    align_memory(&size);
+    function_to_align_memory(&size);
     bool cond1 =(size <= MINIMUM_SIZE);
     bool cond2 =(size > MAXIMUM_SIZE);
     if (cond1 || cond2)
@@ -514,7 +514,7 @@ void* smalloc(size_t size) {
 void* scalloc(size_t num, size_t size)
 {
     size_t alloc_size = num * size;
-    align_memory(&alloc_size);
+    function_to_align_memory(&alloc_size);
 
     void* address_of_allocation = smalloc(alloc_size);
 
@@ -568,7 +568,7 @@ void sfree(void* p) {
 }
 
 void* srealloc(void* oldp, size_t size) {
-    align_memory(&size);
+    function_to_align_memory(&size);
     bool cond1 = (size <= MINIMUM_SIZE);
     bool cond2 = (size > MAXIMUM_SIZE);
     if (cond1 || cond2) {

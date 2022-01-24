@@ -179,7 +179,6 @@ void* mmap_smalloction(size_t md_size)
     {
         list_of_mmap = metaData;
         metaData->md_next =  nullptr;
-        cond2 ++;
         metaData->md_prev = nullptr;
     }
     else
